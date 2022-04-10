@@ -1,99 +1,114 @@
-#[derive(Copy, Clone)]
+use crate::chunk::{Chunk, Code, OpCode, Value};
+use crate::scanner::Scanner;
+use crate::token::{Token, TokenType};
+use crate::vm::VirtualMachine;
+use crate::parser::Parser;
+use std::io::BufRead;
+use std::{env, fs, io};
 
-#[repr(u8)]
-enum OpCode {
-    NoOp,
-    OpConstant,
-    OpReturn
+mod chunk;
+mod scanner;
+mod parser;
+mod token;
+mod vm;
+
+enum InterpretResult {
+    Ok,
+    CompileError,
+    RuntimeError,
 }
 
-type Code = u8;
-
-type Value = f64;
-
-struct Chunk {
-    code: Vec<Code>,
-    constants: Vec<Value>,
-    lines: Vec<usize>
+struct VmStack<TValue: std::fmt::Debug> {
+    max_size: usize,
+    data: Vec<TValue>,
 }
 
-impl Chunk {
-    fn new () ->Self {
-        Chunk {
-            code: Vec::new(),
-            constants: Vec::new(),
-            lines: Vec::new()
+impl<TValue: std::fmt::Debug> VmStack<TValue> {
+    fn new(max_size: usize) -> Self {
+        VmStack {
+            max_size,
+            data: Vec::with_capacity(max_size),
         }
     }
 
-    fn push_chunk(&mut self, code: Code, line: usize) {
-        self.code.push(code);
-        self.lines.push(line);
-    }
-
-    fn push_op_code(&mut self, code: OpCode, line: usize) {
-        self.push_chunk(code as Code, line)
-    }
-
-    fn add_constant(&mut self, value: Value) -> u8 {
-        self.constants.push(value);
-        (self.constants.len() - 1).try_into().unwrap()
-    }
-
-    fn disassemble(&self, name: &str) {
-        println!("== {} ==", name);
-
-        let mut offset = 0;
-        loop {
-            if offset >= self.code.len() { break }
-            offset = self.disassemble_instruction(offset)
+    fn push(&mut self, value: TValue) {
+        if self.data.len() >= self.max_size {
+            panic!("Stack overflow")
         }
+        self.data.push(value)
     }
 
-    fn disassemble_instruction(&self, offset: usize) -> usize {
-        print!("{:0>4} ", offset);
-        if offset > 0 && self.lines[offset] == self.lines[offset - 1] {
-            print!("   | ");
-        } else {
-            print!("{: >4} ", self.lines[offset]);
+    fn pop(&mut self) -> Option<TValue> {
+        self.data.pop()
+    }
+
+    fn trace(&self) {
+        for val in self.data.iter() {
+            print!("[{:?}]", val);
         }
-
-
-        let chunk = self.code[offset];
-        let instruction: OpCode = unsafe { ::std::mem::transmute(chunk) };
-
-        match instruction {
-            OpCode::OpReturn => {
-                self.simple_instruction("OP_RETURN", offset)
-            }
-            OpCode::OpConstant => {
-                self.constant_instruction("OP_CONSTANT", offset)
-            }
-            _ => {
-                println!("Unknown opcode {}\n", chunk);
-                offset + 1
-            }
-        }
-    }
-
-    fn simple_instruction(&self, name: &str, offset: usize) -> usize {
-        println!("{}", name);
-        offset + 1
-    }
-
-    fn constant_instruction(&self, name: &str, offset: usize) -> usize {
-        let const_idx = self.code[offset + 1] as usize;
-        let constant = self.constants[const_idx];
-        println!("{: <16} {: >4} '{}'", name, offset, constant);
-        offset + 2
+        println!();
     }
 }
 
 fn main() {
-    let mut chunks = Chunk::new();
-    let constant = chunks.add_constant(1.2);
-    chunks.push_op_code(OpCode::OpConstant, 123);
-    chunks.push_chunk(constant, 123);
-    chunks.push_op_code(OpCode::OpReturn, 123);
-    chunks.disassemble("Test");
+    let args: Vec<String> = env::args().collect();
+    let mut vm = VirtualMachine::new();
+
+    match args.len() {
+        1 => {
+            repl(&mut vm);
+        }
+        2 => {
+            run_file(&mut vm, args[1].as_str());
+        }
+        _ => {
+            println!("Usage: rlox [path]");
+
+            std::process::exit(64);
+        }
+    }
+}
+
+fn repl(vm: &mut VirtualMachine) {
+    let stdin = io::stdin();
+    let mut lines = stdin.lock().lines();
+    loop {
+        print!("> ");
+        if let Ok(line) = lines.next().unwrap() {
+            interpret(vm, line.as_str());
+        } else {
+            break;
+        }
+    }
+}
+
+fn run_file(vm: &mut VirtualMachine, path: &str) {
+    if let Ok(source) = fs::read_to_string(path) {
+        match interpret(vm, source.as_str()) {
+            InterpretResult::Ok => {}
+            InterpretResult::CompileError => {
+                eprintln!("Compilation error");
+                std::process::exit(65);
+            }
+            InterpretResult::RuntimeError => {
+                eprintln!("Runtime error");
+                std::process::exit(70);
+            }
+        }
+    } else {
+        eprintln!("Could not open file '{}'", path);
+        std::process::exit(64);
+    }
+}
+
+fn interpret(vm: &mut VirtualMachine, source: &str) -> InterpretResult {
+    let mut scanner = Scanner::new(source);
+    let mut parser = Parser::new(&mut scanner, &mut vm.chunks);
+    let parse_result = parser.parse();
+
+    if !parse_result {
+        return InterpretResult::CompileError;
+    }
+
+    vm.run()
 }
