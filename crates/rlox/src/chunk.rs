@@ -14,6 +14,7 @@ pub type Code = u8;
 
 pub type Value = f64;
 
+#[derive(Debug, PartialEq)]
 pub struct Chunk {
     pub code: Vec<Code>,
     constants: Vec<Value>,

@@ -12,7 +12,7 @@ mod parser;
 mod token;
 mod vm;
 
-enum InterpretResult {
+pub enum InterpretResult {
     Ok,
     CompileError,
     RuntimeError,

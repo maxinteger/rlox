@@ -10,6 +10,7 @@ pub struct Parser<'a> {
     panic_mode: bool,
     chunk: &'a mut Chunk,
     rules: HashMap<TokenType, ParseRule>,
+    last_error: String
 }
 
 impl<'a> Parser<'a> {
@@ -22,6 +23,7 @@ impl<'a> Parser<'a> {
             panic_mode: false,
             chunk,
             rules: Parser::get_rules(),
+            last_error: "".to_owned()
         }
     }
 
@@ -32,6 +34,7 @@ impl<'a> Parser<'a> {
         self.end();
         !self.had_error
     }
+
     fn get_rules() -> HashMap<TokenType, ParseRule> {
         let mut map = HashMap::new();
         use TokenType::*;
@@ -251,17 +254,20 @@ impl<'a> Parser<'a> {
         }
 
         self.panic_mode = true;
-        eprint!("[line {}] Error", token.line);
+        let line_prefix = format!("[line {}] Error", token.line);
 
-        if token.kind == TokenType::Eof {
-            eprint!(" at end");
+        let token = if token.kind == TokenType::Eof {
+            " at end".to_owned()
         } else if token.kind == TokenType::Error {
             todo!()
         } else {
-            eprint!(" at '{}'", token.src)
-        }
-        eprintln!(": {}", message);
+            format!(" at '{}'", token.src)
+        };
+
         self.had_error = true;
+        self.last_error = format!("{}{}: {}", line_prefix, token, message);
+
+        eprintln!("{}", self.last_error);
     }
 
     fn number(&mut self) {
@@ -305,10 +311,7 @@ impl<'a> Parser<'a> {
 
         self.expression();
 
-        match op_kind {
-            TokenType::Minus => self.emit_byte(OpCode::Negate as Code),
-            _ => return,
-        }
+        if op_kind == TokenType::Minus { self.emit_byte(OpCode::Negate as Code) }
     }
 
     fn binary(&mut self) {
@@ -348,6 +351,7 @@ impl<'a> Parser<'a> {
 
 #[repr(u8)]
 #[derive(Debug, PartialEq, PartialOrd, Copy, Clone)]
+#[allow(dead_code)]
 enum Precedence {
     None,
     Assignment, // =
@@ -396,5 +400,42 @@ impl ParseRule {
         };
         let precedence: Precedence = unsafe { ::std::mem::transmute(next) };
         precedence
+    }
+}
+
+
+
+#[cfg(test)]
+mod tests {
+    use crate::{Scanner, Parser, Chunk, OpCode};
+
+    fn parse(source: &str) -> (bool, String, Chunk) {
+        let mut chunks = Chunk::new();
+        let mut scanner = Scanner::new(source);
+        let mut parser = Parser::new(&mut scanner, &mut chunks);
+        let parse_result = parser.parse();
+        (parse_result, parser.last_error, chunks)
+    }
+
+    #[test]
+    fn parse_empty_source() {
+        let (result, last_error, _) = parse("");
+
+        assert_eq!(result, false);
+        assert_eq!(last_error, "[line 1] Error at end: Expect expression.")
+    }
+
+    #[test]
+    fn parse_one_constant () {
+        let (result, _, chunks) = parse("42");
+
+        let mut expected_chunks = Chunk::new();
+        expected_chunks.push_op_code(OpCode::Constant, 1);
+        expected_chunks.push_chunk(0, 1); // index of the constant
+        expected_chunks.push_constant(42.0);
+        expected_chunks.push_op_code(OpCode::Return, 1);
+
+        assert_eq!(result, true);
+        assert_eq!(chunks, expected_chunks)
     }
 }
